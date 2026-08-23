@@ -15,18 +15,25 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# 2. SQLite Database for Persistent Deduplication
+# 2. SQLite Database with Auto-Migration
 conn = sqlite3.connect("gcc_leads.db")
 cursor = conn.cursor()
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS seen_gccs (
-        brand_key TEXT PRIMARY KEY,
-        company_name TEXT,
-        city TEXT,
-        date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-""")
-conn.commit()
+
+# Auto-migrate table if old schema exists
+cursor.execute("PRAGMA table_info(seen_gccs)")
+existing_columns = [col[1] for col in cursor.fetchall()]
+
+if not existing_columns or "brand_key" not in existing_columns:
+    cursor.execute("DROP TABLE IF EXISTS seen_gccs")
+    cursor.execute("""
+        CREATE TABLE seen_gccs (
+            brand_key TEXT PRIMARY KEY,
+            company_name TEXT,
+            city TEXT,
+            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
 
 # 3. Targeted RSS Queries Across All Tier-1 Indian Hubs & Gujarat
 QUERIES = [
