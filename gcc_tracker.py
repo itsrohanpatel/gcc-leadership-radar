@@ -60,7 +60,7 @@ WEBSITES_TO_SCRAPE = [
     }
 ]
 
-# Targeted Google News Site Queries (No feeds, strictly scraping Google News Index of domains)
+# Targeted Google Queries (Strictly Last 48h)
 SEARCH_QUERIES = [
     '("Global Capability Center" OR "GCC" OR "Technology Center") ("Ahmedabad" OR "GIFT City" OR "Pune" OR "Mumbai" OR "Bangalore" OR "Hyderabad" OR "Chennai" OR "Gurgaon" OR "Noida") ("launch" OR "set up" OR "expand" OR "opens" OR "invests" OR "leases") when:2d',
     '(startup OR "tech company" OR "D2C" OR "Fintech") (raises OR secures OR bags OR "mops up" OR funding) ("Seed" OR "Series" OR "crore" OR "million" OR "Cr") (India OR Bangalore OR Mumbai OR Delhi OR Gurgaon OR Pune OR Hyderabad OR Ahmedabad) when:2d',
@@ -74,7 +74,6 @@ TRIGGER_KEYWORDS = [
 ]
 
 def scrape_direct_webpage(site_info):
-    """Scrapes raw HTML pages directly from the website without using RSS"""
     url = site_info["url"]
     domain = site_info["domain"]
     pattern = site_info["pattern"]
@@ -99,7 +98,6 @@ def scrape_direct_webpage(site_info):
     except Exception as e:
         print(f"⚠️ Error scraping {url}: {e}")
         
-    # Deduplicate articles from this page
     unique_articles = []
     seen = set()
     for art in articles:
@@ -111,7 +109,7 @@ def scrape_direct_webpage(site_info):
     return unique_articles[:15]
 
 def normalize_brand(name):
-    clean = re.sub(r'(?i)\b(pharmaceuticals|business services|technologies|technology|tech|pvt|ltd|limited|inc|corp|india|group|solutions|services|platform|labs|app)\b', '', name)
+    clean = re.sub(r'(?i)\b(technologies|technology|tech|pvt|ltd|limited|inc|corp|india|group|solutions|services|platform|labs|app|semi|capital)\b', '', name)
     clean = re.sub(r'[^a-zA-Z0-9]', '', clean).lower()
     return clean if len(clean) >= 3 else name.lower()
 
@@ -142,18 +140,18 @@ def analyze_article_with_llm(title, summary, max_retries=3):
     
     Task:
     1. Determine if this represents:
-       a) A foreign or domestic company setting up/expanding a GCC, Tech Center, or large office facility in India.
+       a) A company setting up/expanding a GCC, Tech Center, or office facility in India.
        b) An Indian company/startup raising capital (Seed, Series A/B/C/D, Growth, Debt, or Equity >= ₹4 Cr / $500k).
-    2. Exclude: generic reports, stock market daily wraps, layoffs, government policy announcements, or unrelated news.
+    2. Exclude: generic reports, multiple wrap-ups (e.g. 'Multiple' or 'Top 10'), stock market daily wraps, layoffs, government policy announcements.
     
     Return ONLY a JSON object:
     {{
         "is_lead": true/false,
-        "company": "Short Clean Company Name (max 15 chars)",
-        "stage_type": "New GCC / GCC Expansion / Series A / Series B / Series C / Seed / Growth / Debt",
-        "amount_scale": "e.g. ₹62 Crore / $10 Million / 91k sq ft / 1st India Ctr",
-        "city": "Mumbai / Hyderabad / Bangalore / Pune / Ahmedabad / GIFT City / NCR / Chennai / India",
-        "vc_lead": "Lead VC Name / Global HQ / Self-Funded / Undisclosed",
+        "company": "Short Core Company Name (max 14 chars, NOT 'Multiple')",
+        "stage_type": "New GCC/GCC Expansion/Series A/Series B/Series C/Seed/Growth/Debt",
+        "amount_scale": "e.g. ₹62 Cr / $10M / 91k sq ft / 1st India Ctr",
+        "city": "Mumbai/Hyderabad/Bangalore/Pune/Ahmedabad/GIFT City/NCR/Chennai/India",
+        "vc_lead": "Lead VC / Global HQ / Self-Funded / Undisclosed",
         "is_gcc": true/false
     }}
     """
@@ -181,66 +179,85 @@ def truncate(text, length):
     text = str(text).strip()
     return text[:length - 2] + ".." if len(text) > length else text.ljust(length)
 
-def send_consolidated_discord_hitlist(leads):
-    if not DISCORD_WEBHOOK_URL:
-        print("⚠️ No DISCORD_WEBHOOK_URL configured.")
-        return
+def post_to_discord(payload_content):
+    payload = {
+        "content": payload_content,
+        "username": "BDM Daily Hitlist",
+        "avatar_url": "https://cdn-icons-png.flaticon.com/512/3135/3135715.png"
+    }
+    try:
+        res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        if res.status_code == 204:
+            print("🚀 Message chunk delivered to Discord successfully!")
+        else:
+            print(f"Discord Response: {res.status_code}, {res.text}")
+    except Exception as e:
+        print(f"Failed to post to Discord: {e}")
 
-    if not leads:
-        print("ℹ️ No new leads to send today.")
+def send_consolidated_discord_hitlist(leads):
+    if not DISCORD_WEBHOOK_URL or not leads:
+        print("ℹ️ No new leads to send.")
         return
 
     today_str = datetime.now().strftime("%d-%b-%Y").upper()
 
-    header = f"📊 BDM DAILY HITLIST | {today_str}\n"
+    # 1. Build Compact ASCII Table
+    header = f"📊 **BDM DAILY HITLIST | {today_str}**\n"
     table = "```\n"
-    table += f"{'COMPANY'.ljust(17)}| {'STAGE/TYPE'.ljust(16)}| {'AMOUNT/SCALE'.ljust(16)}| {'CITY'.ljust(11)}| {'VC / LEAD'.ljust(14)}\n"
-    table += "-" * 78 + "\n"
+    table += f"{'COMPANY'.ljust(15)}| {'STAGE/TYPE'.ljust(15)}| {'AMOUNT/SCALE'.ljust(14)}| {'CITY'.ljust(11)}| {'VC / LEAD'.ljust(13)}\n"
+    table += "-" * 74 + "\n"
 
-    links_section = "\n⚡ **QUICK ACTION LINKS:**\n"
-
-    for i, item in enumerate(leads, 1):
-        company = truncate(item["company"], 16)
-        stage = truncate(item["stage_type"], 15)
-        scale = truncate(item["amount_scale"], 15)
+    for item in leads:
+        company = truncate(item["company"], 14)
+        stage = truncate(item["stage_type"], 14)
+        scale = truncate(item["amount_scale"], 13)
         city = truncate(item["city"], 10)
-        vc = truncate(item["vc_lead"], 13)
-
+        vc = truncate(item["vc_lead"], 12)
         table += f"{company} | {stage} | {scale} | {city} | {vc}\n"
 
+    table += "```"
+
+    # 2. Build Compact Quick Action Links
+    links_lines = ["⚡ **QUICK ACTION LINKS:**"]
+    for i, item in enumerate(leads, 1):
         comp_name = item["company"]
         city_name = item["city"]
         is_gcc = item.get("is_gcc", False)
         
         if is_gcc:
             dork_lead = f'https://www.google.com/search?q=site:linkedin.com/in+"{urllib.parse.quote(comp_name)}"+("Managing+Director"+OR+"Site+Leader"+OR+"Head+of+India"+OR+"Director+of+Engineering")+"{city_name}"'
-            links_section += f"{i}. **{comp_name}**: [👤 Search Site Lead]({dork_lead}) • [📰 Article]({item['url']})\n"
+            links_lines.append(f"{i}. **{comp_name}**: [Site Lead]({dork_lead}) • [News]({item['url']})")
         else:
             dork_founder = f'https://www.google.com/search?q=site:linkedin.com/in+"{urllib.parse.quote(comp_name)}"+("Founder"+OR+"CEO"+OR+"Chief+People+Officer"+OR+"Head+of+Talent")'
             vc_lead = item.get("vc_lead", "")
             if vc_lead and vc_lead.lower() not in ["null", "undisclosed", "self-funded", "global hq"]:
                 dork_vc = f'https://www.google.com/search?q=site:linkedin.com/in+"{urllib.parse.quote(vc_lead)}"+("Talent+Partner"+OR+"Operating+Partner"+OR+"Head+of+Talent")'
-                links_section += f"{i}. **{comp_name}**: [👤 Search Founder]({dork_founder}) • [💼 VC Talent]({dork_vc}) • [📰 Article]({item['url']})\n"
+                links_lines.append(f"{i}. **{comp_name}**: [Founder]({dork_founder}) • [VC]({dork_vc}) • [News]({item['url']})")
             else:
-                links_section += f"{i}. **{comp_name}**: [👤 Search Founder]({dork_founder}) • [📰 Article]({item['url']})\n"
+                links_lines.append(f"{i}. **{comp_name}**: [Founder]({dork_founder}) • [News]({item['url']})")
 
-    table += "```"
-    final_message = header + table + links_section
+    links_text = "\n".join(links_lines)
+    full_message = header + table + "\n" + links_text
 
-    payload = {
-        "content": final_message,
-        "username": "BDM Daily Hitlist",
-        "avatar_url": "https://cdn-icons-png.flaticon.com/512/3135/3135715.png"
-    }
-
-    try:
-        res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
-        if res.status_code == 204:
-            print("🚀 Consolidated Daily Hitlist posted to Discord successfully!")
-        else:
-            print(f"Discord Response: {res.status_code}, {res.text}")
-    except Exception as e:
-        print(f"Failed to post to Discord: {e}")
+    # 3. Smart Chunking to Respect Discord's 2,000-Char Limit
+    if len(full_message) <= 1950:
+        post_to_discord(full_message)
+    else:
+        # Send Table First, then Links immediately after
+        post_to_discord(header + table)
+        time.sleep(0.4)
+        
+        # Split links if they are still very long
+        current_chunk = ""
+        for line in links_lines:
+            if len(current_chunk) + len(line) + 1 > 1900:
+                post_to_discord(current_chunk)
+                current_chunk = line + "\n"
+                time.sleep(0.4)
+            else:
+                current_chunk += line + "\n"
+        if current_chunk:
+            post_to_discord(current_chunk)
 
 def main():
     print(f"🔍 Scanning Direct Webpages + Live Queries with {MODEL_NAME}...")
@@ -281,9 +298,14 @@ def main():
 
         if analysis.get("is_lead") and analysis.get("company"):
             company = analysis["company"].strip()
+            
+            # Filter generic words like 'Multiple'
+            if company.lower() in ["multiple", "top 10", "unknown", "india", "startup", "gcc"]:
+                continue
+
             brand_key = normalize_brand(company)
 
-            if brand_key in seen_in_run or is_brand_processed(brand_key) or brand_key in ["unknown", "india", "startup", "gcc"]:
+            if brand_key in seen_in_run or is_brand_processed(brand_key):
                 continue
 
             seen_in_run.add(brand_key)
@@ -293,7 +315,7 @@ def main():
             mark_brand_processed(brand_key, company, analysis.get("city", "India"))
 
     send_consolidated_discord_hitlist(verified_leads)
-    print(f"🏁 Finished. Delivered {len(verified_leads)} leads in 1 consolidated Discord message.")
+    print(f"🏁 Finished. Handled {len(verified_leads)} leads.")
 
 if __name__ == "__main__":
     main()
