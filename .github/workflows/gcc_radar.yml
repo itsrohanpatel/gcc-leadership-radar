@@ -2,7 +2,7 @@ name: GCC Founding Lead Radar
 
 on:
   schedule:
-    - cron: '30 3 * * *'  # Runs automatically at 9:00 AM IST daily (3:30 AM UTC)
+    - cron: '37 3 * * *'  # Runs automatically at 9:00 AM IST daily (3:30 AM UTC)
   workflow_dispatch:      # Allows manual trigger button from GitHub UI
 
 jobs:
